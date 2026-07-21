@@ -32,6 +32,15 @@ enum EtapaNegociacao {
   GANHO             // virou cliente (uso futuro)
 }
 
+enum FaseAutomacao {
+  BACKLOG
+  PRONTO_GATEKEEPER
+  EM_CONTATO_GATEKEEPER
+  PRONTO_DECISOR
+  EM_CONTATO_DECISOR
+  FINALIZADO
+}
+
 enum ResultadoTentativa {
   ATENDEU
   NAO_ATENDEU
@@ -58,6 +67,7 @@ enum PapelUsuario {
   ADMIN
   VENDEDOR
 }
+
 
 // ------------------------------------------------------------
 // USUÁRIOS (equipe que usa o painel)
@@ -139,6 +149,7 @@ model Negociacao {
   origem        OrigemNegociacao  @default(ATIVA)
   etapa         EtapaNegociacao   @default(PROSPECCAO)
   nivelInteresse NivelInteresse?
+  faseAutomacao  FaseAutomacao     @default(BACKLOG)
 
   // --- controle de discagem (fila) ---
   tentativas             Int      @default(0)
@@ -146,11 +157,13 @@ model Negociacao {
   proximaTentativaPermitida DateTime @default(now())
   ultimaTentativaEm       DateTime?
   emFilaDiscagem          Boolean  @default(true)
+  observacaoInicial   String?
 
   // --- resultado comercial ---
   dorIdentificada     String?
   objecaoPrincipal    String?
   observacao          String?
+
 
   criadoEm      DateTime          @default(now())
   atualizadoEm  DateTime          @updatedAt

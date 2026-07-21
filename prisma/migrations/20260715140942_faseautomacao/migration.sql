@@ -1,0 +1,5 @@
+-- CreateEnum
+CREATE TYPE "FaseAutomacao" AS ENUM ('BACKLOG', 'PRONTO_GATEKEEPER', 'EM_CONTATO_GATEKEEPER', 'PRONTO_DECISOR', 'EM_CONTATO_DECISOR', 'FINALIZADO');
+
+-- AlterTable
+ALTER TABLE "negociacoes" ADD COLUMN     "faseAutomacao" "FaseAutomacao" NOT NULL DEFAULT 'BACKLOG';

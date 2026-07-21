@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 
@@ -12,13 +12,30 @@ const listNegociacoesQuery = z.object({
 const patchNegociacaoBody = z.object({
   etapa: z.string().optional(),
   observacao: z.string().optional(),
+  observacaoInicial: z.string().optional(),
   nivelInteresse: z.string().optional(),
+  faseAutomacao: z.enum([
+    "BACKLOG",
+    "PRONTO_GATEKEEPER",
+    "EM_CONTATO_GATEKEEPER",
+    "PRONTO_DECISOR",
+    "EM_CONTATO_DECISOR",
+    "FINALIZADO",
+  ]).optional(),
 });
 
 const createNegociacaoBody = z.object({
   empresaId: z.string().uuid(),
   contatoId: z.string().uuid(),
   origem: z.enum(["ATIVA", "RECEPTIVA"]).default("ATIVA"),
+  faseAutomacao: z.enum([
+    "BACKLOG",
+    "PRONTO_GATEKEEPER",
+    "EM_CONTATO_GATEKEEPER",
+    "PRONTO_DECISOR",
+    "EM_CONTATO_DECISOR",
+    "FINALIZADO",
+  ]).optional(),
 });
 
 const createEmpresaBody = z.object({
@@ -51,8 +68,24 @@ const patchTarefaBody = z.object({
 });
 
 export async function crmRoutes(fastify: FastifyInstance) {
-  // Todas as rotas deste arquivo exigem login do painel
-  fastify.addHook("preHandler", fastify.authenticate);
+  async function authenticateNegociacaoWithApiKey(request: FastifyRequest, reply: FastifyReply) {
+    try {
+      await request.jwtVerify();
+      return;
+    } catch {
+      await fastify.authenticateService(request, reply);
+    }
+  }
+
+  // Todas as rotas deste arquivo exigem login do painel, exceto GET /negociacoes/:id,
+  // que aceita JWT ou x-api-key.
+  fastify.addHook("preHandler", async (request, reply) => {
+    if (request.routerPath === "/negociacoes/:id" && request.method === "GET") {
+      return authenticateNegociacaoWithApiKey(request, reply);
+    }
+
+    await fastify.authenticate(request, reply);
+  });
 
   // ---------------- Negociações ----------------
 
@@ -125,6 +158,72 @@ export async function crmRoutes(fastify: FastifyInstance) {
       return reply.send(negociacao);
     } catch {
       return reply.code(404).send({ error: "Negociação não encontrada." });
+    }
+  });
+
+  fastify.delete<{ Params: { id: string } }>("/negociacoes/:id", async (request, reply) => {
+    try {
+      await prisma.negociacao.delete({ where: { id: request.params.id } });
+      return reply.code(204).send();
+    } catch {
+      return reply.code(404).send({ error: "Negociação não encontrada." });
+    }
+  });
+
+  // ---------------- Leads (cria empresa, contato e negociação numa transação)
+  const createLeadBody = z.object({
+    empresa: createEmpresaBody,
+    contato: z.object({
+      nome: z.string().min(1),
+      cargo: z.string().optional(),
+      email: z.string().email().optional(),
+      telefone: z.string().optional(),
+      ehGatekeeper: z.boolean().optional(),
+      ehDecisor: z.boolean().optional(),
+    }),
+    negociacao: z.object({
+      origem: z.enum(["ATIVA", "RECEPTIVA"]).optional(),
+      faseAutomacao: z.enum([
+        "BACKLOG",
+        "PRONTO_GATEKEEPER",
+        "EM_CONTATO_GATEKEEPER",
+        "PRONTO_DECISOR",
+        "EM_CONTATO_DECISOR",
+        "FINALIZADO",
+      ]).optional(),
+      nivelInteresse: z.string().optional(),
+      observacaoInicial: z.string().optional(),
+    }).optional(),
+  });
+
+  fastify.post("/leads", async (request, reply) => {
+    const parsed = createLeadBody.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "Dados inválidos.", detalhes: parsed.error.flatten() });
+    }
+
+    const { empresa: empresaData, contato: contatoData, negociacao: negociacaoData } = parsed.data;
+
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        const empresa = await tx.empresa.create({ data: empresaData });
+        const contato = await tx.contato.create({ data: { ...contatoData, empresaId: empresa.id } });
+        const negociacao = await tx.negociacao.create({
+          data: {
+            empresaId: empresa.id,
+            contatoId: contato.id,
+            origem: (negociacaoData?.origem as any) ?? undefined,
+            faseAutomacao: (negociacaoData?.faseAutomacao as any) ?? undefined,
+            nivelInteresse: negociacaoData?.nivelInteresse as any,
+            observacaoInicial: negociacaoData?.observacaoInicial,
+          },
+        });
+        return { empresa, contato, negociacao };
+      });
+
+      return reply.code(201).send(result);
+    } catch (err) {
+      return reply.code(500).send({ error: "Erro ao criar lead." });
     }
   });
 

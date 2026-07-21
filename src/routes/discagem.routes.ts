@@ -23,28 +23,47 @@ export async function discagemRoutes(fastify: FastifyInstance) {
     const candidatos = await prisma.negociacao.findMany({
       where: {
         emFilaDiscagem: true,
+        faseAutomacao: { in: ["PRONTO_GATEKEEPER", "PRONTO_DECISOR"] },
         proximaTentativaPermitida: { lte: new Date() },
         contato: {
           naoLigarNovamente: false,
           consentimentoLigacao: true,
-          telefone: { not: null },
+          OR: [
+            { telefone: { not: null } },
+            { empresa: { telefonePrincipal: { not: null } } },
+          ],
         },
       },
-      include: { contato: true, empresa: true },
+      include: {
+        contato: true,
+        empresa: {
+          include: {
+            contatos: {
+              where: { ehGatekeeper: true },
+              select: { nome: true },
+              take: 1,
+            },
+          },
+        },
+      },
       orderBy: { proximaTentativaPermitida: "asc" },
       take: take * 3,
     });
 
     const negociacoes = candidatos
       .filter((n) => n.tentativas < n.maxTentativas)
+      .filter((n) => n.contato.telefone || n.empresa.telefonePrincipal)
       .slice(0, take);
 
     const itens = negociacoes.map((n) => ({
       negociacaoId: n.id,
-      telefone: n.contato.telefone,
+      telefone: n.contato.telefone ?? n.empresa.telefonePrincipal,
       nomeContato: n.contato.nome,
       nomeEmpresa: n.empresa.nome,
+      nomeGatekeeper: n.empresa.contatos[0]?.nome ?? (n.contato.ehGatekeeper ? n.contato.nome : undefined),
       tentativaNumero: n.tentativas + 1,
+      observacao: n.observacao,
+      observacaoInicial: n.observacaoInicial ?? n.observacao,
     }));
 
     return reply.send({ itens });

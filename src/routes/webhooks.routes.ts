@@ -19,9 +19,17 @@ const dialerStatusBody = z.object({
 const gatekeeperBody = z.object({
   negociacaoId: z.string().uuid(),
   nomeGatekeeper: z.string().optional(),
-  nomeDecisorIdentificado: z.string().optional(),
+  nomeEmpresa: z.string().optional(),
+  telefoneEmpresa: z.string().optional(),
+  nomeDecisor: z.string().optional(),
+  cargoDecisor: z.string().optional(),
+  telefoneDecisor: z.string().optional(),
+  emailDecisor: z.string().optional(), // aceitamos e-mail genérico (ex: comercial@empresa.com), sem validar formato estrito
+  solicitouRetorno: z.boolean().default(false),
+  dataHoraContato: z.string().optional(), // texto livre falado pelo gatekeeper, ex: "amanhã de manhã"
+  interesse: z.boolean().default(false),
   transferida: z.boolean().default(false),
-  observacao: z.string().optional(),
+  observacao: z.string().min(1),
 });
 
 const decisorBody = z.object({
@@ -66,6 +74,16 @@ function mapearResultadoParaEtapa(resultadoLigacao: string, aceitouReuniao: bool
   if (resultadoLigacao === "sem_interesse") return "SEM_INTERESSE" as const;
   if (resultadoLigacao === "interessado_com_retorno") return "QUALIFICADO" as const;
   return "QUALIFICADO" as const;
+}
+
+// O gatekeeper fala a data/horário de forma livre (ex: "amanhã de manhã"),
+// e não tentamos parsear isso aqui — quem vê o texto exato é a Tarefa criada
+// para o time comercial. Aqui só evitamos que o número seja discado de novo
+// imediatamente; um valor conservador de 24h é seguro como padrão.
+function proximaTentativaPorRetorno(): Date {
+  const proxima = new Date();
+  proxima.setHours(proxima.getHours() + 24);
+  return proxima;
 }
 
 export async function webhookRoutes(fastify: FastifyInstance) {
@@ -134,22 +152,109 @@ export async function webhookRoutes(fastify: FastifyInstance) {
     }
     const data = parsed.data;
 
-    const negociacao = await prisma.negociacao.findUnique({ where: { id: data.negociacaoId } });
+    const negociacao = await prisma.negociacao.findUnique({
+      where: { id: data.negociacaoId },
+      include: { empresa: true, contato: true },
+    });
     if (!negociacao) {
       return reply.code(404).send({ error: "Negociação não encontrada." });
     }
 
-    await prisma.interacaoEduarda.create({
-      data: {
-        negociacaoId: data.negociacaoId,
-        agente: "gatekeeper",
-        transferida: data.transferida,
-        resumo: data.observacao,
-      },
+    await prisma.$transaction(async (tx) => {
+      await tx.interacaoEduarda.create({
+        data: {
+          negociacaoId: data.negociacaoId,
+          agente: "gatekeeper",
+          transferida: data.transferida,
+          interesse: data.interesse,
+          solicitouRetorno: data.solicitouRetorno,
+          horarioReuniaoSugerido: data.dataHoraContato,
+          resumo: data.observacao,
+        },
+      });
+
+      // Telefone da empresa: grava só se ainda não tínhamos.
+      if (data.telefoneEmpresa && !negociacao.empresa.telefonePrincipal) {
+        await tx.empresa.update({
+          where: { id: negociacao.empresaId },
+          data: { telefonePrincipal: data.telefoneEmpresa },
+        });
+      }
+
+      if (data.nomeDecisor) {
+        // Busca se esse decisor já existe como contato da mesma empresa
+        // (ex: uma tentativa anterior já tinha descoberto o nome dele).
+        const decisorExistente = await tx.contato.findFirst({
+          where: {
+            empresaId: negociacao.empresaId,
+            nome: { equals: data.nomeDecisor, mode: "insensitive" },
+          },
+        });
+
+        const decisor = decisorExistente
+          ? await tx.contato.update({
+              where: { id: decisorExistente.id },
+              data: {
+                cargo: data.cargoDecisor ?? decisorExistente.cargo,
+                telefone: data.telefoneDecisor || decisorExistente.telefone,
+                email: data.emailDecisor || decisorExistente.email,
+                ehDecisor: true,
+              },
+            })
+          : await tx.contato.create({
+              data: {
+                empresaId: negociacao.empresaId,
+                nome: data.nomeDecisor,
+                cargo: data.cargoDecisor,
+                telefone: data.telefoneDecisor,
+                email: data.emailDecisor,
+                ehDecisor: true,
+              },
+            });
+
+        // Retargeta a negociação: a próxima tentativa liga direto pro decisor,
+        // não mais pra recepção/linha geral que atendeu dessa vez.
+        await tx.negociacao.update({
+          where: { id: data.negociacaoId },
+          data: {
+            contatoId: decisor.id,
+            // Se já transferiu a ligação agora, quem grava o desfecho final
+            // é o webhook do Decisor (chamado na sequência, mesma chamada).
+            // Se não transferiu, decidimos aqui se volta pra fila.
+            ...(data.transferida
+              ? {}
+              : {
+                  emFilaDiscagem: data.interesse,
+                  proximaTentativaPermitida: data.solicitouRetorno
+                    ? proximaTentativaPorRetorno()
+                    : negociacao.proximaTentativaPermitida,
+                }),
+          },
+        });
+
+        if (data.solicitouRetorno) {
+          await tx.tarefa.create({
+            data: {
+              negociacaoId: data.negociacaoId,
+              tipo: "retorno",
+              descricao: `Gatekeeper pediu retorno: ${data.dataHoraContato ?? "sem horário definido"}`,
+            },
+          });
+        }
+      } else if (!data.interesse) {
+        // Não identificou decisor nenhum e não há abertura: para de insistir
+        // com esse número (recepção/gatekeeper que atendeu desta vez).
+        await tx.negociacao.update({
+          where: { id: data.negociacaoId },
+          data: { emFilaDiscagem: false, etapa: "SEM_INTERESSE" },
+        });
+        await tx.contato.update({
+          where: { id: negociacao.contatoId },
+          data: { naoLigarNovamente: true },
+        });
+      }
     });
 
-    // Se não houve transferência, a ligação terminou sem chegar ao decisor:
-    // volta para a fila normalmente (o webhook de status do Dialer já cuidou do backoff).
     return reply.send({ status: "registrado" });
   });
 
