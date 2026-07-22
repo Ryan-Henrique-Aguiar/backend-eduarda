@@ -12,9 +12,6 @@ import { crmRoutes } from "./routes/crm.routes.js";
 import { discagemRoutes } from "./routes/discagem.routes.js";
 import { webhookRoutes } from "./routes/webhooks.routes.js";
 
-// Se você usa o Prisma no projeto, descomente a linha abaixo para testar o banco no /health:
-// import { prisma } from "./lib/prisma.js"; // ajuste o caminho se necessário
-
 async function main() {
   const fastify = Fastify({
     logger: {
@@ -23,23 +20,31 @@ async function main() {
     },
   });
 
-  // ---- Segurança de borda ----
-  await fastify.register(helmet);
-
-  // ---- Tratamento da Origin do CORS ----
-  // Remove qualquer barra '/' que venha no final da URL do .env para não quebrar a validação
-  const formattedOrigin = env.CORS_ORIGIN
+  // ---- 1. REGISTRO DO CORS (Sempre em primeiro!) ----
+  // Limpa trailing slashes do .env
+  const allowedOrigin = env.CORS_ORIGIN
     ? env.CORS_ORIGIN.replace(/\/$/, "")
     : "https://frontend-eduarda.vercel.app";
 
   await fastify.register(cors, {
     origin: (origin, cb) => {
-      // Libera se for a origem configurada, sem origem (ex: Postman/cURL) ou se coincidir com o frontend
-      if (!origin || origin.replace(/\/$/, "") === formattedOrigin) {
+      // Libera se não houver origin (Insomnia, cURL, etc)
+      if (!origin) {
         cb(null, true);
         return;
       }
-      cb(new Error("Not allowed by CORS"), false);
+
+      const cleanOrigin = origin.replace(/\/$/, "");
+
+      // Verifica se bate exatamente com a origin do .env ou se é o frontend da Vercel
+      if (cleanOrigin === allowedOrigin || cleanOrigin === "https://frontend-eduarda.vercel.app") {
+        cb(null, true);
+        return;
+      }
+
+      // IMPORTANTE: Retornamos null e false em vez de disparar new Error()
+      // Isso evita que o Fastify gere status 500 sem os cabeçalhos de CORS
+      cb(null, false);
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
@@ -47,39 +52,34 @@ async function main() {
       "Content-Type",
       "Authorization",
       "x-api-key",
-      "ngrok-skip-browser-warning", // <-- Crucial para o ngrok gratuito!
+      "ngrok-skip-browser-warning",
+      "Access-Control-Allow-Origin"
     ],
   });
 
+  // ---- 2. HELMET (Ajustado para não bloquear Cross-Origin) ----
+  await fastify.register(helmet, {
+    crossOriginResourcePolicy: { policy: "cross-origin" }
+  });
+
+  // ---- 3. RATE LIMIT ----
   await fastify.register(rateLimit, {
     max: 100,
     timeWindow: "1 minute",
   });
 
-  // ---- Autenticação ----
+  // ---- 4. PLUGINS DE AUTENTICAÇÃO ----
   await fastify.register(authPlugin);
   await fastify.register(apiKeyPlugin);
 
-  // ---- Rotas ----
+  // ---- 5. ROTAS ----
   await fastify.register(authRoutes);
   await fastify.register(crmRoutes);
   await fastify.register(discagemRoutes);
   await fastify.register(webhookRoutes);
 
-  // ---- Health Check (Com verificação de status da API) ----
-  fastify.get("/health", async (request, reply) => {
-    // Exemplo de teste simples no banco (se usar Prisma, descomente):
-    /*
-    try {
-      await prisma.$queryRaw`SELECT 1`;
-      return { status: "ok", database: "connected" };
-    } catch (error) {
-      reply.status(500);
-      return { status: "error", database: "disconnected", details: error.message };
-    }
-    */
-    return { status: "ok" };
-  });
+  // ---- Health Check ----
+  fastify.get("/health", async () => ({ status: "ok" }));
 
   try {
     await fastify.listen({ port: Number(env.PORT) || 3000, host: "0.0.0.0" });
