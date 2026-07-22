@@ -22,6 +22,14 @@ const patchNegociacaoBody = z.object({
     "EM_CONTATO_DECISOR",
     "FINALIZADO",
   ]).optional(),
+  origem: z.enum(["ATIVA", "RECEPTIVA"]).optional(),
+  tentativas: z.number().optional(),
+  maxTentativas: z.number().optional(),
+  proximaTentativaPermitida: z.string().datetime().optional(),
+  ultimaTentativaEm: z.string().datetime().optional(),
+  emFilaDiscagem: z.boolean().optional(),
+  dorIdentificada: z.string().optional(),
+  objecaoPrincipal: z.string().optional(),
 });
 
 const createNegociacaoBody = z.object({
@@ -77,10 +85,16 @@ export async function crmRoutes(fastify: FastifyInstance) {
     }
   }
 
-  // Todas as rotas deste arquivo exigem login do painel, exceto GET /negociacoes/:id,
-  // que aceita JWT ou x-api-key.
+  // Todas as rotas deste arquivo exigem login do painel, exceto:
+  // - GET /negociacoes/:id (JWT ou x-api-key)
+  // - PATCH /negociacoes/:id (JWT ou x-api-key)
+  // - POST /negociacoes/:id/adiar-tentativa (JWT ou x-api-key)
   fastify.addHook("preHandler", async (request, reply) => {
-    if (request.routerPath === "/negociacoes/:id" && request.method === "GET") {
+    const isnegociacaoRead = request.routerPath === "/negociacoes/:id" && request.method === "GET";
+    const isnegociacaoPatch = request.routerPath === "/negociacoes/:id" && request.method === "PATCH";
+    const isAdiarTentativa = request.routerPath === "/negociacoes/:id/adiar-tentativa" && request.method === "POST";
+    
+    if (isnegociacaoRead || isnegociacaoPatch || isAdiarTentativa) {
       return authenticateNegociacaoWithApiKey(request, reply);
     }
 
@@ -167,6 +181,61 @@ export async function crmRoutes(fastify: FastifyInstance) {
       return reply.code(204).send();
     } catch {
       return reply.code(404).send({ error: "Negociação não encontrada." });
+    }
+  });
+
+  // Adiar próxima tentativa (1d, 1h, 1m)
+  const adiarTentativaBody = z.object({
+    delay: z.string().regex(/^\d+([dhm])$/, "Formato: 1d, 1h ou 1m"),
+  });
+
+  function parseDelay(delayStr: string): number {
+    const match = delayStr.match(/^(\d+)([dhm])$/);
+    if (!match) throw new Error("Formato inválido");
+    const [, value, unit] = match;
+    const num = parseInt(value, 10);
+    
+    switch (unit) {
+      case "d":
+        return num * 24 * 60 * 60 * 1000; // dias em ms
+      case "h":
+        return num * 60 * 60 * 1000; // horas em ms
+      case "m":
+        return num * 60 * 1000; // minutos em ms
+      default:
+        throw new Error("Unidade inválida");
+    }
+  }
+
+  fastify.post<{ Params: { id: string } }>("/negociacoes/:id/adiar-tentativa", async (request, reply) => {
+    const parsed = adiarTentativaBody.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "Formato de delay inválido. Use: 1d, 1h ou 1m" });
+    }
+
+    try {
+      const negociacao = await prisma.negociacao.findUnique({
+        where: { id: request.params.id },
+      });
+
+      if (!negociacao) {
+        return reply.code(404).send({ error: "Negociação não encontrada." });
+      }
+
+      const delayMs = parseDelay(parsed.data.delay);
+      const novaData = new Date(negociacao.proximaTentativaPermitida.getTime() + delayMs);
+
+      const negociacaoAtualizada = await prisma.negociacao.update({
+        where: { id: request.params.id },
+        data: { proximaTentativaPermitida: novaData },
+      });
+
+      return reply.send({
+        mensagem: `Próxima tentativa adiada para ${novaData.toISOString()}`,
+        negociacao: negociacaoAtualizada,
+      });
+    } catch (err) {
+      return reply.code(400).send({ error: "Erro ao adiar tentativa." });
     }
   });
 

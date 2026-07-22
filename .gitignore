@@ -8,6 +8,8 @@ lerna-debug.log*
 .pnpm-debug.log*
 
 # Pastas de dependências (NUNCA subir para o Git, pois o 'npm install' baixa tudo)
+/node_modules
+node_modules
 node_modules/
 jspm_packages/
 

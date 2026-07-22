@@ -56,6 +56,72 @@ curl --location --request PATCH "$BASE_URL/negociacoes/$EXAMPLE_NEGOCIACAO_ID" \
     "nivelInteresse": "MEDIO"
   }'
 
+# PATCH com API Key (atualizar qualquer campo)
+curl --location --request PATCH "$BASE_URL/negociacoes/$EXAMPLE_NEGOCIACAO_ID" \
+  --header "Content-Type: application/json" \
+  --header "x-api-key: $API_KEY" \
+  --data '{
+    "etapa": "QUALIFICADO",
+    "observacao": "Atualizado via API Key",
+    "nivelInteresse": "ALTO",
+    "faseAutomacao": "PRONTO_DECISOR",
+    "dorIdentificada": "Comunicação interna",
+    "objecaoPrincipal": "Orçamento"
+  }'
+
+# PATCH com API Key (atualizar proximaTentativaPermitida diretamente)
+curl --location --request PATCH "$BASE_URL/negociacoes/$EXAMPLE_NEGOCIACAO_ID" \
+  --header "Content-Type: application/json" \
+  --header "x-api-key: $API_KEY" \
+  --data '{
+    "proximaTentativaPermitida": "2026-07-25T10:00:00.000Z"
+  }'
+
+# PATCH com API Key (desativar da fila de discagem)
+curl --location --request PATCH "$BASE_URL/negociacoes/$EXAMPLE_NEGOCIACAO_ID" \
+  --header "Content-Type: application/json" \
+  --header "x-api-key: $API_KEY" \
+  --data '{
+    "emFilaDiscagem": false,
+    "observacao": "Removido da fila automaticamente"
+  }'
+
+# ----------------------
+# CRM - Adiar Tentativa (API Key)
+# ----------------------
+
+# Adiar 1 dia
+curl --location --request POST "$BASE_URL/negociacoes/$EXAMPLE_NEGOCIACAO_ID/adiar-tentativa" \
+  --header "Content-Type: application/json" \
+  --header "x-api-key: $API_KEY" \
+  --data '{
+    "delay": "1d"
+  }'
+
+# Adiar 2 horas
+curl --location --request POST "$BASE_URL/negociacoes/$EXAMPLE_NEGOCIACAO_ID/adiar-tentativa" \
+  --header "Content-Type: application/json" \
+  --header "x-api-key: $API_KEY" \
+  --data '{
+    "delay": "2h"
+  }'
+
+# Adiar 30 minutos
+curl --location --request POST "$BASE_URL/negociacoes/$EXAMPLE_NEGOCIACAO_ID/adiar-tentativa" \
+  --header "Content-Type: application/json" \
+  --header "x-api-key: $API_KEY" \
+  --data '{
+    "delay": "30m"
+  }'
+
+# Adiar 3 dias (com JWT Token)
+curl --location --request POST "$BASE_URL/negociacoes/$EXAMPLE_NEGOCIACAO_ID/adiar-tentativa" \
+  --header "Content-Type: application/json" \
+  --header "Authorization: Bearer $JWT_TOKEN" \
+  --data '{
+    "delay": "3d"
+  }'
+
 # ----------------------
 # CRM - Leads
 # ----------------------
