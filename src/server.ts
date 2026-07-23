@@ -36,14 +36,19 @@ async function main() {
 
       const cleanOrigin = origin.replace(/\/$/, "");
 
-      // Verifica se bate exatamente com a origin do .env ou se é o frontend da Vercel
-      if (cleanOrigin === allowedOrigin || cleanOrigin === "https://frontend-eduarda.vercel.app") {
+      // Permite qualquer origin quando CORS_ORIGIN=* e também aceita
+      // explicitamente o front-end da Vercel.
+      if (
+        allowedOrigin === "*" ||
+        cleanOrigin === allowedOrigin ||
+        cleanOrigin === "https://frontend-eduarda.vercel.app"
+      ) {
         cb(null, true);
         return;
       }
 
       // IMPORTANTE: Retornamos null e false em vez de disparar new Error()
-      // Isso evita que o Fastify gere status 500 sem os cabeçalhos de CORS
+      // Isso evita que o Fastify gere status 500 sem os cabeçalhos de CORS.
       cb(null, false);
     },
     credentials: true,
@@ -53,7 +58,6 @@ async function main() {
       "Authorization",
       "x-api-key",
       "ngrok-skip-browser-warning",
-      "Access-Control-Allow-Origin"
     ],
   });
 
