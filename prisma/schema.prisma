@@ -158,6 +158,7 @@ model Negociacao {
   ultimaTentativaEm       DateTime?
   emFilaDiscagem          Boolean  @default(true)
   observacaoInicial   String?
+  telefoneDecisor     String?  // rastreia telefone específico do decisor para retargetização
 
   // --- resultado comercial ---
   dorIdentificada     String?

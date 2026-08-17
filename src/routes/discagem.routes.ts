@@ -58,7 +58,7 @@ export async function discagemRoutes(fastify: FastifyInstance) {
     const itens = negociacoes.map((n) => ({
       negociacaoId: n.id,
       telefone: n.contato.telefone ?? n.empresa.telefonePrincipal,
-      nomeContato: n.contato.nome,
+      nomeContato: [n.contato.nome],
       nomeEmpresa: n.empresa.nome,
       nomeGatekeeper: n.empresa.contatos[0]?.nome ?? (n.contato.ehGatekeeper ? n.contato.nome : undefined),
       tentativaNumero: n.tentativas + 1,

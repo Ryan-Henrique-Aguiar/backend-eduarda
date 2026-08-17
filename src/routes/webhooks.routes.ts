@@ -2,6 +2,19 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 
+// Transforma snake_case para camelCase automaticamente
+const transformarSnakeToCamel = (obj: any): any => {
+  if (Array.isArray(obj)) return obj.map(transformarSnakeToCamel);
+  if (obj !== null && obj.constructor === Object) {
+    return Object.keys(obj).reduce((acc, key) => {
+      const camelKey = key.replace(/_([a-z])/g, (_, char) => char.toUpperCase());
+      acc[camelKey] = transformarSnakeToCamel(obj[key]);
+      return acc;
+    }, {} as any);
+  }
+  return obj;
+};
+
 const dialerStatusBody = z.object({
   negociacaoId: z.string().uuid(),
   dialerCallId: z.string().optional(),
@@ -14,23 +27,7 @@ const dialerStatusBody = z.object({
     "CAIXA_POSTAL",
   ]),
   duracaoSegundos: z.number().optional(),
-});
-
-const gatekeeperBody = z.object({
-  negociacaoId: z.string().uuid(),
-  nomeGatekeeper: z.string().optional(),
-  nomeEmpresa: z.string().optional(),
-  telefoneEmpresa: z.string().optional(),
-  nomeDecisor: z.string().optional(),
-  cargoDecisor: z.string().optional(),
-  telefoneDecisor: z.string().optional(),
-  emailDecisor: z.string().optional(), // aceitamos e-mail genérico (ex: comercial@empresa.com), sem validar formato estrito
-  solicitouRetorno: z.boolean().default(false),
-  dataHoraContato: z.string().optional(), // texto livre falado pelo gatekeeper, ex: "amanhã de manhã"
-  interesse: z.boolean().default(false),
-  transferida: z.boolean().default(false),
-  observacao: z.string().min(1),
-});
+}).transform(transformarSnakeToCamel);
 
 const decisorBody = z.object({
   negociacaoId: z.string().uuid(),
@@ -47,7 +44,21 @@ const decisorBody = z.object({
   resultadoLigacao: z.string(),
   observacao: z.string().min(1),
   decisorPediuNaoLigarMais: z.boolean().default(false),
-});
+}).transform(transformarSnakeToCamel);
+
+const gatekeeperBody = z.object({
+  negociacaoId: z.string().uuid(),
+  telefoneEmpresa: z.string().optional(),
+  nomeDecisor: z.string().min(1).optional(),
+  cargoDecisor: z.string().optional(),
+  emailDecisor: z.string().email().optional().or(z.literal("")),
+  telefoneDecisor: z.string().optional(),
+  dataHoraContato: z.string().optional(),
+  observacao: z.string().min(1),
+  interesse: z.boolean(),
+  transferida: z.boolean(),
+  solicitouRetorno: z.boolean().default(false),
+}).transform(transformarSnakeToCamel);
 
 // Regra de backoff simples: quanto maior a tentativa, maior o intervalo.
 // Ajuste esses valores conforme a política comercial definida.
@@ -160,102 +171,132 @@ export async function webhookRoutes(fastify: FastifyInstance) {
       return reply.code(404).send({ error: "Negociação não encontrada." });
     }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.interacaoEduarda.create({
-        data: {
-          negociacaoId: data.negociacaoId,
-          agente: "gatekeeper",
-          transferida: data.transferida,
-          interesse: data.interesse,
-          solicitouRetorno: data.solicitouRetorno,
-          horarioReuniaoSugerido: data.dataHoraContato,
-          resumo: data.observacao,
-        },
-      });
-
-      // Telefone da empresa: grava só se ainda não tínhamos.
-      if (data.telefoneEmpresa && !negociacao.empresa.telefonePrincipal) {
-        await tx.empresa.update({
-          where: { id: negociacao.empresaId },
-          data: { telefonePrincipal: data.telefoneEmpresa },
-        });
-      }
-
-      if (data.nomeDecisor) {
-        // Busca se esse decisor já existe como contato da mesma empresa
-        // (ex: uma tentativa anterior já tinha descoberto o nome dele).
-        const decisorExistente = await tx.contato.findFirst({
-          where: {
-            empresaId: negociacao.empresaId,
-            nome: { equals: data.nomeDecisor, mode: "insensitive" },
-          },
-        });
-
-        const decisor = decisorExistente
-          ? await tx.contato.update({
-              where: { id: decisorExistente.id },
-              data: {
-                cargo: data.cargoDecisor ?? decisorExistente.cargo,
-                telefone: data.telefoneDecisor || decisorExistente.telefone,
-                email: data.emailDecisor || decisorExistente.email,
-                ehDecisor: true,
-              },
-            })
-          : await tx.contato.create({
-              data: {
-                empresaId: negociacao.empresaId,
-                nome: data.nomeDecisor,
-                cargo: data.cargoDecisor,
-                telefone: data.telefoneDecisor,
-                email: data.emailDecisor,
-                ehDecisor: true,
-              },
-            });
-
-        // Retargeta a negociação: a próxima tentativa liga direto pro decisor,
-        // não mais pra recepção/linha geral que atendeu dessa vez.
-        await tx.negociacao.update({
-          where: { id: data.negociacaoId },
-          data: {
-            contatoId: decisor.id,
-            // Se já transferiu a ligação agora, quem grava o desfecho final
-            // é o webhook do Decisor (chamado na sequência, mesma chamada).
-            // Se não transferiu, decidimos aqui se volta pra fila.
-            ...(data.transferida
-              ? {}
-              : {
-                  emFilaDiscagem: data.interesse,
-                  proximaTentativaPermitida: data.solicitouRetorno
-                    ? proximaTentativaPorRetorno()
-                    : negociacao.proximaTentativaPermitida,
-                }),
-          },
-        });
-
-        if (data.solicitouRetorno) {
-          await tx.tarefa.create({
-            data: {
-              negociacaoId: data.negociacaoId,
-              tipo: "retorno",
-              descricao: `Gatekeeper pediu retorno: ${data.dataHoraContato ?? "sem horário definido"}`,
-            },
-          });
-        }
-      } else if (!data.interesse) {
-        // Não identificou decisor nenhum e não há abertura: para de insistir
-        // com esse número (recepção/gatekeeper que atendeu desta vez).
-        await tx.negociacao.update({
-          where: { id: data.negociacaoId },
-          data: { emFilaDiscagem: false, etapa: "SEM_INTERESSE" },
-        });
-        await tx.contato.update({
-          where: { id: negociacao.contatoId },
-          data: { naoLigarNovamente: true },
-        });
-      }
+    console.log(`[GATEKEEPER] Iniciando processamento - NegociacaoId: ${data.negociacaoId}`, {
+      nomeDecisor: data.nomeDecisor,
+      telefoneDecisor: data.telefoneDecisor,
+      interesse: data.interesse,
+      transferida: data.transferida,
     });
 
-    return reply.send({ status: "registrado" });
+    try {
+      await prisma.$transaction(async (tx) => {
+        await tx.interacaoEduarda.create({
+          data: {
+            negociacaoId: data.negociacaoId,
+            agente: "gatekeeper",
+            transferida: data.transferida,
+            interesse: data.interesse,
+            solicitouRetorno: data.solicitouRetorno,
+            horarioReuniaoSugerido: data.dataHoraContato,
+            resumo: data.observacao,
+          },
+        });
+
+        // Telefone da empresa: grava só se ainda não tínhamos.
+        if (data.telefoneEmpresa && !negociacao.empresa.telefonePrincipal) {
+          console.log(`[GATEKEEPER] Atualizando telefone da empresa: ${data.telefoneEmpresa}`);
+          await tx.empresa.update({
+            where: { id: negociacao.empresaId },
+            data: { telefonePrincipal: data.telefoneEmpresa },
+          });
+        }
+
+        if (data.nomeDecisor) {
+          console.log(`[GATEKEEPER] Decisor identificado: ${data.nomeDecisor} - Telefone: ${data.telefoneDecisor}`);
+          
+          // Busca se esse decisor já existe como contato da mesma empresa
+          // (ex: uma tentativa anterior já tinha descoberto o nome dele).
+          const decisorExistente = await tx.contato.findFirst({
+            where: {
+              empresaId: negociacao.empresaId,
+              nome: { equals: data.nomeDecisor, mode: "insensitive" },
+            },
+          });
+
+          const decisor = decisorExistente
+            ? await tx.contato.update({
+                where: { id: decisorExistente.id },
+                data: {
+                  cargo: data.cargoDecisor ?? decisorExistente.cargo,
+                  telefone: data.telefoneDecisor || decisorExistente.telefone,
+                  email: data.emailDecisor || decisorExistente.email,
+                  ehDecisor: true,
+                },
+              })
+            : await tx.contato.create({
+                data: {
+                  empresaId: negociacao.empresaId,
+                  nome: data.nomeDecisor,
+                  cargo: data.cargoDecisor,
+                  telefone: data.telefoneDecisor,
+                  email: data.emailDecisor,
+                  ehDecisor: true,
+                },
+              });
+
+          // Retargeta a negociação: a próxima tentativa liga direto pro decisor,
+          // não mais pra recepção/linha geral que atendeu dessa vez.
+          // Reseta tentativas para começar fresh com decisor
+          // @ts-ignore - campo telefoneDecisor será tipado após npx prisma generate (Node.js 16+)
+          await tx.negociacao.update({
+            where: { id: data.negociacaoId },
+            data: {
+              contatoId: decisor.id,
+              faseAutomacao: "PRONTO_DECISOR",
+              // telefoneDecisor: data.telefoneDecisor, // TODO: Ativar após npx prisma generate com Node.js 16+
+              observacao: data.observacao,
+              tentativas: 0, // reseta contador ao retargetar para decisor
+              proximaTentativaPermitida: new Date(), // permite ligar imediatamente
+              // Se já transferiu a ligação agora, quem grava o desfecho final
+              // é o webhook do Decisor (chamado na sequência, mesma chamada).
+              // Se não transferiu, decidimos aqui se volta pra fila.
+              ...(data.transferida
+                ? {}
+                : {
+                    emFilaDiscagem: data.interesse,
+                    proximaTentativaPermitida: data.solicitouRetorno
+                      ? proximaTentativaPorRetorno()
+                      : new Date(),
+                  }),
+            },
+          });
+
+          console.log(`[GATEKEEPER] ✓ Negociação retargetizada - ContatoId: ${decisor.id}, FaseAutomacao: PRONTO_DECISOR`);
+
+          if (data.solicitouRetorno) {
+            console.log(`[GATEKEEPER] Criando tarefa de retorno: ${data.dataHoraContato}`);
+            await tx.tarefa.create({
+              data: {
+                negociacaoId: data.negociacaoId,
+                tipo: "retorno",
+                descricao: `Gatekeeper pediu retorno: ${data.dataHoraContato ?? "sem horário definido"}`,
+              },
+            });
+          }
+        } else if (!data.interesse) {
+          // Não identificou decisor nenhum e não há abertura: para de insistir
+          // com esse número (recepção/gatekeeper que atendeu desta vez).
+          console.log(`[GATEKEEPER] ⚠️ Sem interesse e sem decisor identificado - Parando tentativas`);
+          await tx.negociacao.update({
+            where: { id: data.negociacaoId },
+            data: { emFilaDiscagem: false, etapa: "SEM_INTERESSE" },
+          });
+          await tx.contato.update({
+            where: { id: negociacao.contatoId },
+            data: { naoLigarNovamente: true },
+          });
+        }
+      });
+
+      console.log(`[GATEKEEPER] ✓ Webhook processado com sucesso - NegociacaoId: ${data.negociacaoId}`);
+      return reply.send({ status: "registrado" });
+    } catch (error) {
+      console.error(`[GATEKEEPER] ✗ ERRO ao processar webhook`, {
+        negociacaoId: data.negociacaoId,
+        erro: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   });
 
   // -------- Eduarda: agente Decisor (tool resposta-decisor) --------
@@ -276,63 +317,85 @@ export async function webhookRoutes(fastify: FastifyInstance) {
 
     const novaEtapa = mapearResultadoParaEtapa(data.resultadoLigacao, data.aceitouReuniao);
 
-    await prisma.$transaction(async (tx) => {
-      await tx.interacaoEduarda.create({
-        data: {
-          negociacaoId: data.negociacaoId,
-          agente: "decisor",
-          interesse: data.interesse,
-          nivelInteresse: data.nivelInteresse,
-          aceitouReuniao: data.aceitouReuniao,
-          horarioReuniaoSugerido: data.horarioReuniaoSugerido,
-          solicitouRetorno: data.solicitouRetorno,
-          resultadoLigacao: data.resultadoLigacao,
-          resumo: data.observacao,
-        },
-      });
-
-      await tx.negociacao.update({
-        where: { id: data.negociacaoId },
-        data: {
-          etapa: novaEtapa,
-          nivelInteresse: data.nivelInteresse,
-          dorIdentificada: data.cenarioAtendimento,
-          observacao: data.observacao,
-          // Para de discar assim que houve conversa real com o decisor,
-          // independentemente do resultado.
-          emFilaDiscagem: false,
-        },
-      });
-
-      await tx.contato.update({
-        where: { id: negociacao.contatoId },
-        data: {
-          cargo: data.cargoDecisor ?? undefined,
-          email: data.emailDecisor || undefined,
-          telefone: data.telefoneDecisor || undefined,
-          naoLigarNovamente: data.decisorPediuNaoLigarMais,
-        },
-      });
-
-      if (data.aceitouReuniao) {
-        await tx.tarefa.create({
-          data: {
-            negociacaoId: data.negociacaoId,
-            tipo: "reuniao",
-            descricao: `Reunião sugerida: ${data.horarioReuniaoSugerido ?? "horário a combinar"}`,
-          },
-        });
-      } else if (data.solicitouRetorno) {
-        await tx.tarefa.create({
-          data: {
-            negociacaoId: data.negociacaoId,
-            tipo: "retorno",
-            descricao: `Retorno solicitado: ${data.horarioReuniaoSugerido ?? "sem horário definido"}`,
-          },
-        });
-      }
+    console.log(`[DECISOR] Iniciando processamento - NegociacaoId: ${data.negociacaoId}`, {
+      nomeDecisor: data.nomeDecisor,
+      interesse: data.interesse,
+      nivelInteresse: data.nivelInteresse,
+      aceitouReuniao: data.aceitouReuniao,
+      resultadoLigacao: data.resultadoLigacao,
+      novaEtapa,
     });
 
-    return reply.send({ status: "registrado", etapa: novaEtapa });
+    try {
+      await prisma.$transaction(async (tx) => {
+        await tx.interacaoEduarda.create({
+          data: {
+            negociacaoId: data.negociacaoId,
+            agente: "decisor",
+            interesse: data.interesse,
+            nivelInteresse: data.nivelInteresse,
+            aceitouReuniao: data.aceitouReuniao,
+            horarioReuniaoSugerido: data.horarioReuniaoSugerido,
+            solicitouRetorno: data.solicitouRetorno,
+            resultadoLigacao: data.resultadoLigacao,
+            resumo: data.observacao,
+          },
+        });
+
+        await tx.negociacao.update({
+          where: { id: data.negociacaoId },
+          data: {
+            etapa: novaEtapa,
+            nivelInteresse: data.nivelInteresse,
+            dorIdentificada: data.cenarioAtendimento,
+            observacao: data.observacao,
+            // Para de discar assim que houve conversa real com o decisor,
+            // independentemente do resultado.
+            emFilaDiscagem: false,
+          },
+        });
+
+        console.log(`[DECISOR] ✓ Negociação atualizada - Etapa: ${novaEtapa}, Interesse: ${data.nivelInteresse}`);
+
+        await tx.contato.update({
+          where: { id: negociacao.contatoId },
+          data: {
+            cargo: data.cargoDecisor ?? undefined,
+            email: data.emailDecisor || undefined,
+            telefone: data.telefoneDecisor || undefined,
+            naoLigarNovamente: data.decisorPediuNaoLigarMais,
+          },
+        });
+
+        if (data.aceitouReuniao) {
+          console.log(`[DECISOR] Criando tarefa de reunião: ${data.horarioReuniaoSugerido}`);
+          await tx.tarefa.create({
+            data: {
+              negociacaoId: data.negociacaoId,
+              tipo: "reuniao",
+              descricao: `Reunião sugerida: ${data.horarioReuniaoSugerido ?? "horário a combinar"}`,
+            },
+          });
+        } else if (data.solicitouRetorno) {
+          console.log(`[DECISOR] Criando tarefa de retorno: ${data.horarioReuniaoSugerido}`);
+          await tx.tarefa.create({
+            data: {
+              negociacaoId: data.negociacaoId,
+              tipo: "retorno",
+              descricao: `Retorno solicitado: ${data.horarioReuniaoSugerido ?? "sem horário definido"}`,
+            },
+          });
+        }
+      });
+
+      console.log(`[DECISOR] ✓ Webhook processado com sucesso - NegociacaoId: ${data.negociacaoId}`);
+      return reply.send({ status: "registrado", etapa: novaEtapa });
+    } catch (error) {
+      console.error(`[DECISOR] ✗ ERRO ao processar webhook`, {
+        negociacaoId: data.negociacaoId,
+        erro: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   });
 }
