@@ -185,20 +185,35 @@ Aceita tanto **snake_case** quanto **camelCase**:
 
 Recebe resultado da conversa com o decisor. **É o resultado final** da negociação.
 
+Quando a chamada for receptiva, `negociacaoId` pode ser `null`, `"null"` ou ser omitido.
+Nesse caso, o webhook localiza ou cria a empresa e o contato e cria uma negociação com
+`origem: RECEPTIVA` antes de registrar o resultado.
+
 #### Request Body
 
 Também aceita snake_case e camelCase:
 
 ```typescript
 {
-  "negociacaoId": "74dde874-77c2-43ef-867a-54c65c187002",
+  "negociacaoId": "74dde874-77c2-43ef-867a-54c65c187002", // null em chamada receptiva
+  "nome_empresa": "Juniores",
+  "telefone_empresa": "35998270245",
+  "nome_contato": "Lucas",
+  "ehdecisor": true,
+  "cargo": "Desenvolvedor",
+  "email": "lucas.souza@juniores.com.br",
+  "telefone": "3598963318",
+  "email_decisor": "lucas.souza@juniores.com.br",
+  "data_hora_contato": "17/08/2026 16:30",
+  "dorIdentificada": "Possui poucos funcionários para atender o volume de atendimento",
+  "objecaoPrincipal": "Receio de que os valores sejam muito altos",
   "nome_decisor": "Lucas Filho de Abraão",
   "cargo_decisor": "Desenvolvedor / Tech Lead",
   "email_decisor": "lucas@juniores.com",
   "telefone_decisor": "3598963318",
   "cenario_atendimento": "Empresa com 15 pessoas, ainda usando sistemas legados",
   "interesse": true,
-  "nivel_interesse": "ALTO",                           // Enum: ALTO, MEDIO, BAIXO, SEM_INTERESSE
+  "nivel_interesse": "ALTO",                           // Também aceita alto, medio, baixo e sem_interesse
   "aceitou_reuniao": true,
   "horario_reuniao_sugerido": "15/08/2026 às 14h",    // Texto livre
   "solicitou_retorno": false,
@@ -210,13 +225,15 @@ Também aceita snake_case e camelCase:
 
 #### Campos Obrigatórios
 
-- `negociacaoId` - UUID da negociação
-- `nomeDecisor` - Nome completo (min 1 caractere)
+- `negociacaoId` - UUID da negociação; opcional em chamada receptiva
+- `nomeDecisor` ou `nome_contato` - Nome completo (min 1 caractere)
 - `interesse` - boolean
 - `nivelInteresse` - ALTO | MEDIO | BAIXO | SEM_INTERESSE
 - `aceitouReuniao` - boolean
 - `resultadoLigacao` - string descritiva
 - `observacao` - string (min 1 caractere)
+
+Em chamada receptiva, `nome_empresa` também é obrigatório para criar a negociação.
 
 #### Estados da Negociação Após
 
@@ -231,7 +248,8 @@ Também aceita snake_case e camelCase:
 ```typescript
 {
   "status": "registrado",
-  "etapa": "REUNIAO_MARCADA"  // Nova etapa
+  "etapa": "REUNIAO_MARCADA",  // Nova etapa
+  "negociacaoId": "id-gerado-ou-existente"
 }
 ```
 

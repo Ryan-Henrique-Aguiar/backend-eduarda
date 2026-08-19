@@ -30,16 +30,32 @@ const dialerStatusBody = z.object({
 }).transform(transformarSnakeToCamel);
 
 const decisorBody = z.object({
-  negociacaoId: z.string().uuid(),
-  nomeDecisor: z.string().min(1),
+  negociacaoId: z.preprocess(
+    (value) => value === null || value === "null" || value === "" ? undefined : value,
+    z.string().uuid().optional(),
+  ),
+  nomeEmpresa: z.string().min(1).optional(),
+  telefoneEmpresa: z.string().optional(),
+  nomeContato: z.string().min(1).optional(),
+  ehdecisor: z.boolean().optional(),
+  nomeDecisor: z.string().min(1).optional(),
   cargoDecisor: z.string().optional(),
+  cargo: z.string().optional(),
   emailDecisor: z.string().email().optional().or(z.literal("")),
+  email: z.string().email().optional().or(z.literal("")),
   telefoneDecisor: z.string().optional(),
+  telefone: z.string().optional(),
   cenarioAtendimento: z.string().optional(),
+  dorIdentificada: z.string().optional(),
+  objecaoPrincipal: z.string().optional(),
   interesse: z.boolean(),
-  nivelInteresse: z.enum(["ALTO", "MEDIO", "BAIXO", "SEM_INTERESSE"]),
+  nivelInteresse: z.preprocess(
+    (value) => typeof value === "string" ? value.toUpperCase() : value,
+    z.enum(["ALTO", "MEDIO", "BAIXO", "SEM_INTERESSE"]),
+  ),
   aceitouReuniao: z.boolean(),
   horarioReuniaoSugerido: z.string().optional(),
+  dataHoraContato: z.string().optional(),
   solicitouRetorno: z.boolean().default(false),
   resultadoLigacao: z.string(),
   observacao: z.string().min(1),
@@ -307,18 +323,18 @@ export async function webhookRoutes(fastify: FastifyInstance) {
     }
     const data = parsed.data;
 
-    const negociacao = await prisma.negociacao.findUnique({
-      where: { id: data.negociacaoId },
-      include: { contato: true },
-    });
-    if (!negociacao) {
-      return reply.code(404).send({ error: "Negociação não encontrada." });
+    const nomeDecisor = data.nomeDecisor ?? data.nomeContato;
+    const cargoDecisor = data.cargoDecisor ?? data.cargo;
+    const emailDecisor = data.emailDecisor || data.email;
+    const telefoneDecisor = data.telefoneDecisor ?? data.telefone;
+    if (!nomeDecisor) {
+      return reply.code(400).send({ error: "Informe nomeDecisor ou nome_contato." });
     }
 
     const novaEtapa = mapearResultadoParaEtapa(data.resultadoLigacao, data.aceitouReuniao);
 
     console.log(`[DECISOR] Iniciando processamento - NegociacaoId: ${data.negociacaoId}`, {
-      nomeDecisor: data.nomeDecisor,
+      nomeDecisor,
       interesse: data.interesse,
       nivelInteresse: data.nivelInteresse,
       aceitouReuniao: data.aceitouReuniao,
@@ -327,10 +343,89 @@ export async function webhookRoutes(fastify: FastifyInstance) {
     });
 
     try {
-      await prisma.$transaction(async (tx) => {
+      const negociacao = await prisma.$transaction(async (tx) => {
+        let negociacao = data.negociacaoId
+          ? await tx.negociacao.findUnique({ where: { id: data.negociacaoId } })
+          : null;
+
+        if (!negociacao) {
+          if (data.negociacaoId) {
+            throw new Error("NEGOCIACAO_NAO_ENCONTRADA");
+          }
+          if (!data.nomeEmpresa) {
+            throw new Error("NOME_EMPRESA_OBRIGATORIO");
+          }
+
+          const empresaExistente = await tx.empresa.findFirst({
+            where: { nome: { equals: data.nomeEmpresa, mode: "insensitive" } },
+          });
+          const empresa = empresaExistente
+            ? await tx.empresa.update({
+                where: { id: empresaExistente.id },
+                data: {
+                  telefonePrincipal: data.telefoneEmpresa || empresaExistente.telefonePrincipal,
+                  cenarioAtendimento: data.cenarioAtendimento || empresaExistente.cenarioAtendimento,
+                },
+              })
+            : await tx.empresa.create({
+                data: {
+                  nome: data.nomeEmpresa,
+                  telefonePrincipal: data.telefoneEmpresa,
+                  cenarioAtendimento: data.cenarioAtendimento,
+                },
+              });
+
+          const contatoExistente = await tx.contato.findFirst({
+            where: {
+              empresaId: empresa.id,
+              OR: [
+                ...(emailDecisor ? [{ email: emailDecisor }] : []),
+                ...(telefoneDecisor ? [{ telefone: telefoneDecisor }] : []),
+                { nome: { equals: nomeDecisor, mode: "insensitive" } },
+              ],
+            },
+          });
+          const contato = contatoExistente
+            ? await tx.contato.update({
+                where: { id: contatoExistente.id },
+                data: {
+                  nome: nomeDecisor,
+                  cargo: cargoDecisor ?? contatoExistente.cargo,
+                  email: emailDecisor || contatoExistente.email,
+                  telefone: telefoneDecisor || contatoExistente.telefone,
+                  ehDecisor: data.ehdecisor ?? true,
+                },
+              })
+            : await tx.contato.create({
+                data: {
+                  empresaId: empresa.id,
+                  nome: nomeDecisor,
+                  cargo: cargoDecisor,
+                  email: emailDecisor,
+                  telefone: telefoneDecisor,
+                  ehDecisor: data.ehdecisor ?? true,
+                },
+              });
+
+          negociacao = await tx.negociacao.create({
+            data: {
+              empresaId: empresa.id,
+              contatoId: contato.id,
+              origem: "RECEPTIVA",
+              etapa: novaEtapa,
+              nivelInteresse: data.nivelInteresse,
+              faseAutomacao: "FINALIZADO",
+              emFilaDiscagem: false,
+              dorIdentificada: data.dorIdentificada ?? data.cenarioAtendimento,
+              objecaoPrincipal: data.objecaoPrincipal,
+              observacao: data.observacao,
+            },
+          });
+        }
+
         await tx.interacaoEduarda.create({
           data: {
-            negociacaoId: data.negociacaoId,
+            negociacaoId: negociacao.id,
             agente: "decisor",
             interesse: data.interesse,
             nivelInteresse: data.nivelInteresse,
@@ -343,11 +438,12 @@ export async function webhookRoutes(fastify: FastifyInstance) {
         });
 
         await tx.negociacao.update({
-          where: { id: data.negociacaoId },
+          where: { id: negociacao.id },
           data: {
             etapa: novaEtapa,
             nivelInteresse: data.nivelInteresse,
-            dorIdentificada: data.cenarioAtendimento,
+            dorIdentificada: data.dorIdentificada ?? data.cenarioAtendimento,
+            objecaoPrincipal: data.objecaoPrincipal,
             observacao: data.observacao,
             // Para de discar assim que houve conversa real com o decisor,
             // independentemente do resultado.
@@ -360,9 +456,10 @@ export async function webhookRoutes(fastify: FastifyInstance) {
         await tx.contato.update({
           where: { id: negociacao.contatoId },
           data: {
-            cargo: data.cargoDecisor ?? undefined,
-            email: data.emailDecisor || undefined,
-            telefone: data.telefoneDecisor || undefined,
+            nome: nomeDecisor,
+            cargo: cargoDecisor ?? undefined,
+            email: emailDecisor || undefined,
+            telefone: telefoneDecisor || undefined,
             naoLigarNovamente: data.decisorPediuNaoLigarMais,
           },
         });
@@ -371,7 +468,7 @@ export async function webhookRoutes(fastify: FastifyInstance) {
           console.log(`[DECISOR] Criando tarefa de reunião: ${data.horarioReuniaoSugerido}`);
           await tx.tarefa.create({
             data: {
-              negociacaoId: data.negociacaoId,
+                negociacaoId: negociacao.id,
               tipo: "reuniao",
               descricao: `Reunião sugerida: ${data.horarioReuniaoSugerido ?? "horário a combinar"}`,
             },
@@ -380,17 +477,25 @@ export async function webhookRoutes(fastify: FastifyInstance) {
           console.log(`[DECISOR] Criando tarefa de retorno: ${data.horarioReuniaoSugerido}`);
           await tx.tarefa.create({
             data: {
-              negociacaoId: data.negociacaoId,
+                negociacaoId: negociacao.id,
               tipo: "retorno",
               descricao: `Retorno solicitado: ${data.horarioReuniaoSugerido ?? "sem horário definido"}`,
             },
           });
         }
+
+        return negociacao;
       });
 
-      console.log(`[DECISOR] ✓ Webhook processado com sucesso - NegociacaoId: ${data.negociacaoId}`);
-      return reply.send({ status: "registrado", etapa: novaEtapa });
+      console.log(`[DECISOR] ✓ Webhook processado com sucesso - NegociacaoId: ${negociacao.id}`);
+      return reply.send({ status: "registrado", etapa: novaEtapa, negociacaoId: negociacao.id });
     } catch (error) {
+      if (error instanceof Error && error.message === "NEGOCIACAO_NAO_ENCONTRADA") {
+        return reply.code(404).send({ error: "Negociação não encontrada." });
+      }
+      if (error instanceof Error && error.message === "NOME_EMPRESA_OBRIGATORIO") {
+        return reply.code(400).send({ error: "nome_empresa é obrigatório quando negociacaoId é nulo." });
+      }
       console.error(`[DECISOR] ✗ ERRO ao processar webhook`, {
         negociacaoId: data.negociacaoId,
         erro: error instanceof Error ? error.message : String(error),
