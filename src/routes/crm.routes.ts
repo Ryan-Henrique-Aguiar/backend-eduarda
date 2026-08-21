@@ -243,7 +243,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
   const createLeadBody = z.object({
     empresa: createEmpresaBody,
     contato: z.object({
-      nome: z.string().min(1),
+      nome: z.string(),
       cargo: z.string().optional(),
       email: z.string().email().optional(),
       telefone: z.string().optional(),
