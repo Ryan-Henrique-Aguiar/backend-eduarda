@@ -95,6 +95,12 @@ export class WebhookService {
               telefone: data.telefoneDecisor || decisorExistente.telefone,
               email: data.emailDecisor || decisorExistente.email,
               ehDecisor: true,
+              ...(data.naoLigarNovamente !== undefined
+                ? { naoLigarNovamente: data.naoLigarNovamente }
+                : {}),
+              ...(data.consentimentoLigacao !== undefined
+                ? { consentimentoLigacao: data.consentimentoLigacao }
+                : {}),
             })
           : await repository.createContato({
               empresa: { connect: { id: negociacao.empresaId } },
@@ -103,6 +109,8 @@ export class WebhookService {
               telefone: data.telefoneDecisor,
               email: data.emailDecisor,
               ehDecisor: true,
+              naoLigarNovamente: data.naoLigarNovamente,
+              consentimentoLigacao: data.consentimentoLigacao,
             });
 
         await repository.updateNegociacao(data.negociacaoId, {
@@ -133,7 +141,21 @@ export class WebhookService {
           emFilaDiscagem: false,
           etapa: "SEM_INTERESSE",
         });
-        await repository.updateContato(negociacao.contatoId, { naoLigarNovamente: true });
+        await repository.updateContato(negociacao.contatoId, {
+          naoLigarNovamente: data.naoLigarNovamente ?? true,
+          ...(data.consentimentoLigacao !== undefined
+            ? { consentimentoLigacao: data.consentimentoLigacao }
+            : {}),
+        });
+      } else if (data.naoLigarNovamente !== undefined || data.consentimentoLigacao !== undefined) {
+        await repository.updateContato(negociacao.contatoId, {
+          ...(data.naoLigarNovamente !== undefined
+            ? { naoLigarNovamente: data.naoLigarNovamente }
+            : {}),
+          ...(data.consentimentoLigacao !== undefined
+            ? { consentimentoLigacao: data.consentimentoLigacao }
+            : {}),
+        });
       }
 
       return { status: "registrado" } as const;
@@ -184,6 +206,8 @@ export class WebhookService {
               email: emailDecisor || contatoExistente.email,
               telefone: telefoneDecisor || contatoExistente.telefone,
               ehDecisor: data.ehdecisor ?? true,
+              naoLigarNovamente: data.naoLigarNovamente ?? contatoExistente.naoLigarNovamente,
+              consentimentoLigacao: data.consentimentoLigacao ?? contatoExistente.consentimentoLigacao,
             })
           : await repository.createContato({
               empresa: { connect: { id: empresa.id } },
@@ -192,6 +216,8 @@ export class WebhookService {
               email: emailDecisor,
               telefone: telefoneDecisor,
               ehDecisor: data.ehdecisor ?? true,
+              naoLigarNovamente: data.naoLigarNovamente,
+              consentimentoLigacao: data.consentimentoLigacao,
             });
 
         negociacao = await tx.negociacao.create({
@@ -236,7 +262,12 @@ export class WebhookService {
         cargo: cargoDecisor ?? undefined,
         email: emailDecisor || undefined,
         telefone: telefoneDecisor || undefined,
-        naoLigarNovamente: data.decisorPediuNaoLigarMais,
+        ...(data.naoLigarNovamente !== undefined || data.decisorPediuNaoLigarMais
+          ? { naoLigarNovamente: data.naoLigarNovamente ?? data.decisorPediuNaoLigarMais }
+          : {}),
+        ...(data.consentimentoLigacao !== undefined
+          ? { consentimentoLigacao: data.consentimentoLigacao }
+          : {}),
       });
 
       if (data.aceitouReuniao || data.solicitouRetorno) {

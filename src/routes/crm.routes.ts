@@ -223,7 +223,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
       }
 
       const delayMs = parseDelay(parsed.data.delay);
-      const novaData = new Date(negociacao.proximaTentativaPermitida.getTime() + delayMs);
+      const novaData = new Date(Date.now() + delayMs);
 
       const negociacaoAtualizada = await prisma.negociacao.update({
         where: { id: request.params.id },
