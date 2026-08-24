@@ -54,7 +54,7 @@ const createEmpresaBody = z.object({
 
 const createContatoBody = z.object({
   empresaId: z.string().uuid(),
-  nome: z.string().min(1),
+  nome: z.string(),
   cargo: z.string().optional(),
   email: z.string().email().optional(),
   telefone: z.string().optional(),

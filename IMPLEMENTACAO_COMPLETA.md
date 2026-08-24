@@ -137,10 +137,9 @@ console.log(`[DECISOR] ✓ Webhook processado com sucesso - NegociacaoId: ${data
 
 1. **Visão Geral** - Introdução aos webhooks
 2. **Autenticação** - Como autenticar requisições
-3. **3 Endpoints** com especificação completa:
-   - `POST /webhooks/dialer/status`
-   - `POST /webhooks/eduarda/gatekeeper`
-   - `POST /webhooks/eduarda/decisor`
+3. **2 Endpoints** com especificação completa:
+  - `POST /webhooks/eduarda/gatekeeper`
+  - `POST /webhooks/eduarda/decisor`
 4. **Fluxo Completo** - Diagrama ASCII da jornada
 5. **Estados e Transições** - Todos os possíveis estados
 6. **Logs Estruturados** - Como interpretar os logs

@@ -16,10 +16,6 @@ export class WebhookRepository {
     });
   }
 
-  createTentativa(data: Prisma.TentativaLigacaoCreateInput) {
-    return this.db.tentativaLigacao.create({ data });
-  }
-
   updateNegociacao(id: string, data: Prisma.NegociacaoUpdateInput) {
     return this.db.negociacao.update({ where: { id }, data });
   }

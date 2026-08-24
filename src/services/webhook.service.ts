@@ -1,21 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { WebhookRepository } from "../repositories/webhook.repository.js";
-import type { DecisorInput, DialerStatusInput, GatekeeperInput } from "../schemas/webhooks.schemas.js";
-
-const horasPorResultado: Record<string, number> = {
-  NAO_ATENDEU: 2,
-  OCUPADO: 1,
-  CAIU: 4,
-  CAIXA_POSTAL: 24,
-  NUMERO_INVALIDO: 24 * 30,
-};
-
-function calcularProximaTentativa(resultado: string, tentativaAtual: number): Date {
-  const proxima = new Date();
-  const horas = (horasPorResultado[resultado] ?? 4) + tentativaAtual * 0.5;
-  proxima.setHours(proxima.getHours() + horas);
-  return proxima;
-}
+import type { DecisorInput, GatekeeperInput } from "../schemas/webhooks.schemas.js";
 
 function proximaTentativaPorRetorno(): Date {
   const proxima = new Date();
@@ -29,44 +14,28 @@ function mapearResultadoParaEtapa(resultadoLigacao: string, aceitouReuniao: bool
   return "QUALIFICADO" as const;
 }
 
-export class WebhookService {
-  async registrarStatusDialer(data: DialerStatusInput) {
-    const repository = new WebhookRepository(prisma);
-    const negociacao = await repository.findNegociacaoById(data.negociacaoId);
-    if (!negociacao) throw new Error("NEGOCIACAO_NAO_ENCONTRADA");
-
-    const numeroTentativa = negociacao.tentativas + 1;
-    await repository.createTentativa({
-      negociacao: { connect: { id: data.negociacaoId } },
-      numero: numeroTentativa,
-      resultado: data.resultado,
-      dialerCallId: data.dialerCallId,
-      duracaoSegundos: data.duracaoSegundos,
-      finalizadaEm: new Date(),
-    });
-
-    if (data.resultado === "ATENDEU") {
-      await repository.updateNegociacao(data.negociacaoId, {
-        tentativas: numeroTentativa,
-        ultimaTentativaEm: new Date(),
-      });
-      return { status: "aguardando_conversa_eduarda" } as const;
-    }
-
-    const esgotouTentativas = numeroTentativa >= negociacao.maxTentativas;
-    await repository.updateNegociacao(data.negociacaoId, {
-      tentativas: numeroTentativa,
-      ultimaTentativaEm: new Date(),
-      emFilaDiscagem: !esgotouTentativas,
-      etapa: esgotouTentativas ? "PERDIDO" : "PROSPECCAO",
-      proximaTentativaPermitida: esgotouTentativas
-        ? negociacao.proximaTentativaPermitida
-        : calcularProximaTentativa(data.resultado, numeroTentativa),
-    });
-
-    return { status: esgotouTentativas ? "esgotado" : "reagendado" } as const;
+function proximaFaseWebhook(
+  faseAtual: string,
+  agente: "gatekeeper" | "decisor",
+) {
+  if (
+    agente === "gatekeeper" &&
+    (faseAtual === "PRONTO_GATEKEEPER" || faseAtual === "EM_CONTATO_GATEKEEPER")
+  ) {
+    return "PRONTO_DECISOR" as const;
   }
 
+  if (
+    agente === "decisor" &&
+    (faseAtual === "PRONTO_DECISOR" || faseAtual === "EM_CONTATO_DECISOR")
+  ) {
+    return "FINALIZADO" as const;
+  }
+
+  return undefined;
+}
+
+export class WebhookService {
   async registrarGatekeeper(data: GatekeeperInput) {
     return prisma.$transaction(async (tx) => {
       const repository = new WebhookRepository(tx);
@@ -158,17 +127,26 @@ export class WebhookService {
         });
       }
 
+
+      const proximaFase = !data.interesse
+        ? "FINALIZADO" as const
+        : proximaFaseWebhook(negociacao.faseAutomacao, "gatekeeper");
+      if (proximaFase) {
+        await repository.updateNegociacao(data.negociacaoId, {
+          faseAutomacao: proximaFase,
+        });
+      }
       return { status: "registrado" } as const;
     });
   }
 
   async registrarDecisor(data: DecisorInput) {
-    const nomeDecisor = data.nomeDecisor ?? data.nomeContato;
+    const nomeDecisorInformado = data.nomeDecisor ?? data.nomeContato;
+    const nomeDecisor = nomeDecisorInformado ?? "";
     const cargoDecisor = data.cargoDecisor ?? data.cargo;
     const emailDecisor = data.emailDecisor || data.email;
     const telefoneDecisor = data.telefoneDecisor ?? data.telefone;
 
-    if (!nomeDecisor) throw new Error("NOME_DECISOR_OBRIGATORIO");
     const novaEtapa = mapearResultadoParaEtapa(data.resultadoLigacao, data.aceitouReuniao);
 
     const negociacao = await prisma.$transaction(async (tx) => {
@@ -201,7 +179,7 @@ export class WebhookService {
         );
         const contato = contatoExistente
           ? await repository.updateContato(contatoExistente.id, {
-              nome: nomeDecisor,
+              ...(nomeDecisorInformado !== undefined ? { nome: nomeDecisorInformado } : {}),
               cargo: cargoDecisor ?? contatoExistente.cargo,
               email: emailDecisor || contatoExistente.email,
               telefone: telefoneDecisor || contatoExistente.telefone,
@@ -250,6 +228,7 @@ export class WebhookService {
 
       await repository.updateNegociacao(negociacao.id, {
         etapa: novaEtapa,
+        faseAutomacao: proximaFaseWebhook(negociacao.faseAutomacao, "decisor"),
         nivelInteresse: data.nivelInteresse,
         dorIdentificada: data.dorIdentificada ?? data.cenarioAtendimento,
         objecaoPrincipal: data.objecaoPrincipal,
@@ -258,7 +237,7 @@ export class WebhookService {
       });
 
       await repository.updateContato(negociacao.contatoId, {
-        nome: nomeDecisor,
+        ...(nomeDecisorInformado !== undefined ? { nome: nomeDecisorInformado } : {}),
         cargo: cargoDecisor ?? undefined,
         email: emailDecisor || undefined,
         telefone: telefoneDecisor || undefined,

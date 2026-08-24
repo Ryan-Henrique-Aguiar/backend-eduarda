@@ -71,8 +71,6 @@ Observação: GET /negociacoes/:id aceita tanto JWT quanto API key.
 - GET /tarefas e PATCH /tarefas/:id
 - GET /dashboard/resumo
 - GET /discagem/fila-elegivel
-- POST /discagem/marcar-enviado
-- POST /webhooks/dialer/status
 - POST /webhooks/eduarda/gatekeeper
 - POST /webhooks/eduarda/decisor
 

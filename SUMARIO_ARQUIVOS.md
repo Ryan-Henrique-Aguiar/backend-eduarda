@@ -71,7 +71,6 @@
 - **Mudanças**: +80 linhas de código
 - **Adições**:
   1. **Linhas 1-30**: Função `transformarSnakeToCamel` (movida antes dos schemas)
-  2. **Linhas 5-16**: Aplicação de `.transform()` em `dialerStatusBody`
   3. **Linhas 30-46**: Aplicação de `.transform()` em `gatekeeperBody`
   4. **Linhas 48-61**: Aplicação de `.transform()` em `decisorBody`
   5. **Linhas 140-240**: Logging estruturado no webhook gatekeeper

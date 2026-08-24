@@ -9,9 +9,8 @@
 - **Arquivos**: `src/routes/webhooks.routes.ts` (linhas 1-30)
 
 ```typescript
-// Aplicado a todos os schemas Zod:
-- dialerStatusBody
-- gatekeeperBody  
+// Aplicado aos schemas Zod dos agentes:
+- gatekeeperBody
 - decisorBody
 ```
 

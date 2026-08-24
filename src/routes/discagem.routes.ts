@@ -2,10 +2,6 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 
-const marcarEnviadoBody = z.object({
-  negociacaoIds: z.array(z.string().uuid()).min(1),
-});
-
 export async function discagemRoutes(fastify: FastifyInstance) {
   // Todas as rotas aqui são chamadas por serviços (n8n), não por humanos
   fastify.addHook("preHandler", fastify.authenticateService);
@@ -55,6 +51,13 @@ export async function discagemRoutes(fastify: FastifyInstance) {
       .filter((n) => n.contato.telefone || n.empresa.telefonePrincipal)
       .slice(0, take);
 
+    if (negociacoes.length > 0) {
+      await prisma.negociacao.updateMany({
+        where: { id: { in: negociacoes.map((negociacao) => negociacao.id) } },
+        data: { etapa: "EM_LIGACAO", emFilaDiscagem: false },
+      });
+    }
+
     const itens = negociacoes.map((n) => ({
       negociacaoId: n.id,
       telefone: n.contato.telefone ?? n.empresa.telefonePrincipal,
@@ -67,21 +70,5 @@ export async function discagemRoutes(fastify: FastifyInstance) {
     }));
 
     return reply.send({ itens });
-  });
-
-  // n8n chama isso depois que o Dialer confirmou que aceitou a lista,
-  // para essas negociações não serem selecionadas de novo no próximo ciclo.
-  fastify.post("/discagem/marcar-enviado", async (request, reply) => {
-    const parsed = marcarEnviadoBody.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: "Dados inválidos.", detalhes: parsed.error.flatten() });
-    }
-
-    await prisma.negociacao.updateMany({
-      where: { id: { in: parsed.data.negociacaoIds } },
-      data: { etapa: "EM_LIGACAO", emFilaDiscagem: false },
-    });
-
-    return reply.send({ atualizado: parsed.data.negociacaoIds.length });
   });
 }

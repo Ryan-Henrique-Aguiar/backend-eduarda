@@ -1,20 +1,6 @@
 import { z } from "zod";
 import { transformarSnakeToCamel } from "../utils/object.utils.js";
 
-export const dialerStatusBody = z.object({
-  negociacaoId: z.string().uuid(),
-  dialerCallId: z.string().optional(),
-  resultado: z.enum([
-    "ATENDEU",
-    "NAO_ATENDEU",
-    "OCUPADO",
-    "CAIU",
-    "NUMERO_INVALIDO",
-    "CAIXA_POSTAL",
-  ]),
-  duracaoSegundos: z.number().optional(),
-}).transform(transformarSnakeToCamel);
-
 export const decisorBody = z.preprocess(
   transformarSnakeToCamel,
   z.object({
@@ -24,9 +10,9 @@ export const decisorBody = z.preprocess(
     ),
     nomeEmpresa: z.string().min(1).optional(),
     telefoneEmpresa: z.string().optional(),
-    nomeContato: z.string().min(1).optional(),
+    nomeContato: z.string().optional(),
     ehdecisor: z.boolean().optional(),
-    nomeDecisor: z.string().min(1).optional(),
+    nomeDecisor: z.string().optional(),
     cargoDecisor: z.string().optional(),
     cargo: z.string().optional(),
     emailDecisor: z.preprocess(
@@ -64,7 +50,7 @@ export const gatekeeperBody = z.preprocess(
   z.object({
     negociacaoId: z.string().uuid(),
     telefoneEmpresa: z.string().optional(),
-    nomeDecisor: z.string().min(1).optional(),
+    nomeDecisor: z.string().optional(),
     cargoDecisor: z.string().optional(),
     emailDecisor: z.preprocess(
       (value) => value === "null" || value === null ? "" : value,
@@ -81,6 +67,5 @@ export const gatekeeperBody = z.preprocess(
   }),
 );
 
-export type DialerStatusInput = z.infer<typeof dialerStatusBody>;
 export type GatekeeperInput = z.infer<typeof gatekeeperBody>;
 export type DecisorInput = z.infer<typeof decisorBody>;

@@ -227,26 +227,9 @@ curl --location --request GET "$BASE_URL/dashboard/resumo" \
 curl --location --request GET "$BASE_URL/discagem/fila-elegivel?limite=50" \
   --header "x-api-key: $API_KEY"
 
-curl --location --request POST "$BASE_URL/discagem/marcar-enviado" \
-  --header "Content-Type: application/json" \
-  --header "x-api-key: $API_KEY" \
-  --data '{
-    "negociacaoIds": ["'$EXAMPLE_NEGOCIACAO_ID'"]
-  }'
-
 # ----------------------
-# Webhooks Dialer / Eduarda (API key)
+# Webhooks Eduarda (API key)
 # ----------------------
-
-curl --location --request POST "$BASE_URL/webhooks/dialer/status" \
-  --header "Content-Type: application/json" \
-  --header "x-api-key: $API_KEY" \
-  --data '{
-    "negociacaoId": "'$EXAMPLE_NEGOCIACAO_ID'",
-    "dialerCallId": "call-123",
-    "resultado": "ATENDEU",
-    "duracaoSegundos": 45
-  }'
 
 curl --location --request POST "$BASE_URL/webhooks/eduarda/gatekeeper" \
   --header "Content-Type: application/json" \

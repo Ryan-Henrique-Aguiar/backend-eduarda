@@ -11,82 +11,16 @@ Os webhooks integram o sistema de discagem (Dialer) com o agente de IA (Eduarda)
 Todos os webhooks requerem autenticação de serviço:
 
 ```bash
-Header: Authorization: Bearer <SERVICE_TOKEN>
+Header: x-api-key: <SERVICE_API_KEY>
 ```
 
-Implementada via plugin `fastify.authenticateService` em `src/plugins/auth.ts`
+Implementada via plugin `fastify.authenticateService`.
 
 ---
 
 ## 📍 Endpoints
 
-### 1️⃣ POST `/webhooks/dialer/status`
-
-Recebe o status de cada tentativa de ligação realizada pelo Dialer.
-
-#### Request Body
-
-```typescript
-{
-  "negociacaoId": "74dde874-77c2-43ef-867a-54c65c187002",  // UUID obrigatório
-  "dialerCallId": "call_123456",                             // ID da chamada no Dialer (opcional)
-  "resultado": "ATENDEU",                                     // Enum obrigatório
-  "duracaoSegundos": 180                                      // Duração em segundos (opcional)
-}
-```
-
-#### Valores Válidos de `resultado`
-
-- `ATENDEU` - Pessoa atendeu a ligação
-- `NAO_ATENDEU` - Ninguém atendeu (enviar para fila com backoff)
-- `OCUPADO` - Linha ocupada (backoff mais curto)
-- `CAIU` - Ligação caiu (backoff médio)
-- `NUMERO_INVALIDO` - Número não existe (não retenta tão cedo)
-- `CAIXA_POSTAL` - Caiu na caixa postal (backoff longo)
-
-#### Regra de Backoff
-
-```typescript
-// Tempo até próxima tentativa (em horas)
-NAO_ATENDEU    → 2 horas + incremento
-OCUPADO        → 1 hora + incremento
-CAIU           → 4 horas + incremento
-CAIXA_POSTAL   → 24 horas + incremento
-NUMERO_INVALIDO → 720 horas (30 dias)
-```
-
-#### Response
-
-```typescript
-// Se conseguiu discar novamente
-{
-  "status": "reagendado"
-}
-
-// Se esgotou tentativas
-{
-  "status": "esgotado"
-}
-
-// Se atendeu (aguarda conversa com Eduarda)
-{
-  "status": "aguardando_conversa_eduarda"
-}
-```
-
-#### Estados da Negociação Após
-
-| Resultado | emFilaDiscagem | Etapa | Próxima |
-|-----------|---|---|---|
-| ATENDEU | false | PROSPECCAO | Aguarda webhook Eduarda |
-| NAO_ATENDEU | true | PROSPECCAO | Retenta no intervalo |
-| OCUPADO | true | PROSPECCAO | Retenta no intervalo |
-| NUMERO_INVALIDO | false | PERDIDO | Não retenta |
-| Esgotou tentativas | false | PERDIDO | Não retenta |
-
----
-
-### 2️⃣ POST `/webhooks/eduarda/gatekeeper`
+### 1️⃣ POST `/webhooks/eduarda/gatekeeper`
 
 Recebe dados da conversa com o gatekeeper/recepcionista. É aqui que **o decisor é identificado**.
 
@@ -181,7 +115,7 @@ Aceita tanto **snake_case** quanto **camelCase**:
 
 ---
 
-### 3️⃣ POST `/webhooks/eduarda/decisor`
+### 2️⃣ POST `/webhooks/eduarda/decisor`
 
 Recebe resultado da conversa com o decisor. **É o resultado final** da negociação.
 
@@ -285,7 +219,6 @@ Em chamada receptiva, `nome_empresa` também é obrigatório para criar a negoci
                      ▼
         ┌────────────────────────┐
         │ DIALER tenta ligar     │
-        │ /webhooks/dialer/status│
         └────────────────────────┘
                      │
         ┌────────────┴──────────────┬──────────────────┐
@@ -495,8 +428,7 @@ print(response.json())  # {'status': 'registrado'}
 
 ## 📋 Checklist de Integração
 
-- [ ] Autenticação configurada (SERVICE_TOKEN no .env)
-- [ ] Dialer envia webhook `/webhooks/dialer/status` após cada tentativa
+- [ ] Autenticação configurada (`SERVICE_API_KEY` no .env)
 - [ ] Eduarda envia webhook `/webhooks/eduarda/gatekeeper` após conversa com recepção
 - [ ] Eduarda envia webhook `/webhooks/eduarda/decisor` após conversa com decisor
 - [ ] Monitorar logs estruturados em produção
