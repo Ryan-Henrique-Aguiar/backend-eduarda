@@ -51,13 +51,6 @@ export async function discagemRoutes(fastify: FastifyInstance) {
       .filter((n) => n.contato.telefone || n.empresa.telefonePrincipal)
       .slice(0, take);
 
-    if (negociacoes.length > 0) {
-      await prisma.negociacao.updateMany({
-        where: { id: { in: negociacoes.map((negociacao) => negociacao.id) } },
-        data: { etapa: "EM_LIGACAO", emFilaDiscagem: false },
-      });
-    }
-
     const itens = negociacoes.map((n) => ({
       negociacaoId: n.id,
       telefone: n.contato.telefone ?? n.empresa.telefonePrincipal,
