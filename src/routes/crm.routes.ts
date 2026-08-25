@@ -227,7 +227,10 @@ export async function crmRoutes(fastify: FastifyInstance) {
 
       const negociacaoAtualizada = await prisma.negociacao.update({
         where: { id: request.params.id },
-        data: { proximaTentativaPermitida: novaData },
+        data: {
+          proximaTentativaPermitida: novaData,
+          tentativas: { increment: 1 },
+        },
       });
 
       return reply.send({
